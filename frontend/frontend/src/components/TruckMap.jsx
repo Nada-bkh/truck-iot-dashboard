@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import 'leaflet-routing-machine';
@@ -12,41 +12,76 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
 });
 
-const SmoothMarker = ({ position }) => {
+const SmoothMarker = ({ position, truckId, isSelected, plate, driver, state }) => {
   const markerRef = useRef(null);
   const map = useMap();
 
   useEffect(() => {
-    if (markerRef.current) {
+    if (markerRef.current && Array.isArray(position) && position.length === 2) {
       markerRef.current.setLatLng(position);
-      map.panTo(position, { animate: true, duration: 0.3 });
+      if (isSelected) {
+        map.panTo(position, { animate: true, duration: 0.2 });
+      }
     }
-  }, [position, map]);
+  }, [position, map, isSelected]);
 
-  return <Marker position={position} ref={markerRef} />;
+  return position && Array.isArray(position) && position.length === 2 ? (
+    <Marker position={position} ref={markerRef}>
+      <Popup>
+        <div>
+          <strong>Plate:</strong> {plate}<br />
+          <strong>Driver:</strong> {driver}<br />
+          <strong>State:</strong> {state}
+        </div>
+      </Popup>
+    </Marker>
+  ) : null;
 };
 
-const TruckMap = ({ truckData, route }) => {
-  const position = truckData.gps?.latitude && truckData.gps?.longitude ? [truckData.gps.latitude, truckData.gps.longitude] : [8.9824, -79.5199];
-  const departure = route && route.departure?.latitude && route.departure?.longitude
-    ? [route.departure.latitude, route.departure.longitude]
-    : truckData.departure?.latitude && truckData.departure?.longitude ? [truckData.departure.latitude, truckData.departure.longitude] : [8.9824, -79.5199];
-  const destination = route && route.destination?.latitude && route.destination?.longitude
-    ? [route.destination.latitude, route.destination.longitude]
-    : truckData.destination?.latitude && truckData.destination?.longitude ? [truckData.destination.latitude, truckData.destination.longitude] : [9.9281, -84.0907];
+const TruckMap = ({ trucks, selectedTruckId }) => {
+  const defaultPosition = [8.9824, -79.5199]; // Panama City
 
-  console.log('TruckMap props:', { position, departure, destination });
+  if (!trucks || !Array.isArray(trucks) || trucks.length === 0) {
+    return <div className="text-white">No truck data available</div>;
+  }
 
   return (
-    <MapContainer center={position} zoom={10} style={{ height: '400px', margin: '0 16px' }}>
-      <TileLayer
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        attribution='© <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-      />
-      <SmoothMarker position={position} />
-      <Marker position={destination} />
-      <RoutingMachine start={departure} end={destination} />
-    </MapContainer>
+    <div className="w-full h-full" id="map-container" style={{ height: '600px' }}>
+      <MapContainer
+        center={defaultPosition}
+        zoom={10}
+        style={{ height: '100%', width: '100%' }}
+      >
+        <TileLayer
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution='© <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        />
+        {trucks.map((truck) => {
+          const position = truck.gps?.latitude && truck.gps?.longitude
+            ? [truck.gps.latitude, truck.gps.longitude]
+            : defaultPosition;
+          return (
+            <React.Fragment key={truck.truck_id}>
+              <SmoothMarker
+                position={position}
+                truckId={truck.truck_id}
+                isSelected={truck.truck_id === selectedTruckId}
+                plate={truck.plate}
+                driver={truck.driver}
+                state={truck.state}
+              />
+              {selectedTruckId === truck.truck_id && truck.route && (
+                <RoutingMachine
+                  start={truck.departure}
+                  end={truck.destination}
+                  truckId={truck.truck_id}
+                />
+              )}
+            </React.Fragment>
+          );
+        })}
+      </MapContainer>
+    </div>
   );
 };
 

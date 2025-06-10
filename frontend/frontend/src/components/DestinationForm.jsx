@@ -61,37 +61,37 @@ const DestinationForm = ({ onSubmit }) => {
   };
 
   return (
-    <div className="p-4 bg-white shadow-md rounded-lg max-w-3xl mx-auto mt-4">
-      <h2 className="text-xl font-semibold mb-4 text-gray-800">Set Truck Route</h2>
-      {error && (
-        <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-md">{error}</div>
-      )}
-      <form onSubmit={handleSubmit} className="flex flex-col md:flex-row gap-4">
-        <input
-          type="text"
-          placeholder="Departure (e.g., Avenida Balboa, Panama City)"
-          value={departure}
-          onChange={(e) => setDeparture(e.target.value)}
-          className="flex-1 p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-          disabled={loading}
-        />
-        <input
-          type="text"
-          placeholder="Destination (e.g., Calle 50, San José)"
-          value={destination}
-          onChange={(e) => setDestination(e.target.value)}
-          className="flex-1 p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-          disabled={loading}
-        />
-        <button
-          type="submit"
-          className="p-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition disabled:bg-gray-400"
-          disabled={loading}
-        >
-          {loading ? 'Loading...' : 'Set Route'}
-        </button>
-      </form>
-    </div>
+      <div className="p-4 bg-white shadow-md rounded-lg max-w-3xl mx-auto mt-4">
+        <h2 className="text-xl font-semibold mb-4 text-gray-800">Set Truck Route</h2>
+        {error && (
+            <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-md">{error}</div>
+        )}
+        <form onSubmit={handleSubmit} className="flex flex-col md:flex-row gap-4">
+          <input
+              type="text"
+              placeholder="Departure (e.g., Avenida Balboa, Panama City)"
+              value={departure}
+              onChange={(e) => setDeparture(e.target.value)}
+              className="flex-1 p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+              disabled={loading}
+          />
+          <input
+              type="text"
+              placeholder="Destination (e.g., Calle 50, San José)"
+              value={destination}
+              onChange={(e) => setDestination(e.target.value)}
+              className="flex-1 p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+              disabled={loading}
+          />
+          <button
+              type="submit"
+              className="p-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition disabled:bg-gray-400"
+              disabled={loading}
+          >
+            {loading ? 'Loading...' : 'Set Route'}
+          </button>
+        </form>
+      </div>
   );
 };
 
