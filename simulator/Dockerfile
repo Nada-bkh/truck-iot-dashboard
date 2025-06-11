@@ -1,7 +1,43 @@
-FROM python:3.9
+# Dockerfile for Truck Simulator
+FROM python:3.11-slim
+
+# Set working directory
 WORKDIR /app
-RUN apt-get update && apt-get install -y librdkafka-dev
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements file
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
 COPY . .
+
+# Create logs directory
+RUN mkdir -p logs
+
+# Create non-root user for security
+RUN useradd --create-home --shell /bin/bash --uid 1000 simulator
+RUN chown -R simulator:simulator /app
+USER simulator
+
+# Set environment variables with defaults
+ENV PYTHONUNBUFFERED=1
+ENV LOG_LEVEL=INFO
+ENV OSRM_HOST=osrm
+ENV OSRM_PORT=5000
+ENV KAFKA_BROKERS=kafka:9092
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import socket; socket.create_connection(('kafka', 9092), timeout=5)"
+
+# Run the simulator
 CMD ["python", "simulate_truck.py"]

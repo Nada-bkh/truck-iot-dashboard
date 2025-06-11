@@ -59,10 +59,14 @@ services:
       - ./osrm-data:/data
       - ./osrm-profiles:/profiles
     command: >
-      sh -c "osrm-extract -p /profiles/truck.lua /data/central-america-latest.osm.pbf &&
-             osrm-partition /data/central-america-latest.osrm &&
-             osrm-customize /data/central-america-latest.osrm &&
-             osrm-routed --algorithm mld /data/central-america-latest.osrm"
+      sh -c "
+        if [ ! -f /data/tunisia-latest.osrm ]; then
+          osrm-extract -p /profiles/truck.lua /data/tunisia-latest.osm.pbf &&
+          osrm-partition /data/tunisia-latest.osrm &&
+          osrm-customize /data/tunisia-latest.osrm;
+        fi &&
+        osrm-routed --algorithm mld /data/tunisia-latest.osrm"
+
     ports:
       - "5000:5000"
     networks:

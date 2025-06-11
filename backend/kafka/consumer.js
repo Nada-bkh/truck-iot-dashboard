@@ -17,7 +17,24 @@ const runConsumer = async (io) => {
       eachMessage: async ({ topic, partition, message }) => {
         const data = JSON.parse(message.value.toString());
         console.log('Received Kafka message:', data);
+
         io.emit('truckData', data);
+
+        const truckData = {
+          id: data.truck_id,
+          truckId: data.truck_id,
+          position: [data.latitude, data.longitude],
+          lat: data.latitude,
+          lng: data.longitude,
+          speed: data.speed,
+          weight: data.weight,
+          bearing: data.bearing,
+          status: data.status,
+          driver: data.driver,
+          lastUpdate: new Date().toISOString(),
+        };
+
+        io.emit('truckUpdate', truckData);
       },
     });
   } catch (error) {
