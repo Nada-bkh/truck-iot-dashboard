@@ -1,267 +1,375 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, CircleMarker } from 'react-leaflet';
 import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
+
 
 const TruckMap = ({ trucks, selectedTruck, onTruckSelect, onRequestRoute, socket }) => {
-  const mapRef = useRef(null);
-  const map = useRef(null);
-  const truckMarkers = useRef({});
-  const routePolylines = useRef({});
   const [mapLoaded, setMapLoaded] = useState(false);
+  const [showRoutes, setShowRoutes] = useState(true);
+  const mapRef = useRef(null);
 
   useEffect(() => {
-    if (!mapRef.current || map.current) return;
-
-    map.current = L.map(mapRef.current, {
-      center: [36.8065, 10.1815], // Default to Tunis
-      zoom: 10,
-      zoomControl: true
-    });
-
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap contributors',
-      maxZoom: 18
-    }).addTo(map.current);
-
-    map.current.on('click', (e) => {
-      if (selectedTruck && onRequestRoute) {
-        const destination = {
-          lat: e.latlng.lat,
-          lng: e.latlng.lng
-        };
-        onRequestRoute(selectedTruck, destination);
-      }
-    });
-
     setMapLoaded(true);
+  }, []);
 
-    return () => {
-      if (map.current) {
-        map.current.remove();
-        map.current = null;
-      }
-    };
-  }, [selectedTruck, onRequestRoute]);
+  // Debug logging
+  useEffect(() => {
+    console.log('TruckMap received trucks:', trucks);
+    console.log('Selected truck:', selectedTruck);
+  }, [trucks, selectedTruck]);
 
   const createTruckIcon = (truck) => {
-    const isSelected = selectedTruck?.id === truck.id;
-    const color = isSelected ? '#dc2626' : '#059669';
-    const size = isSelected ? 28 : 24;
+    const isSelected = selectedTruck?.id === truck.id || 
+                      selectedTruck?.truckId === truck.truckId || 
+                      selectedTruck?.truck_id === truck.truck_id;
     
-    return L.divIcon({
+    const color = isSelected ? '#dc2626' : truck.state === 'En Route' ? '#059669' : '#6b7280';
+    const size = isSelected ? 32 : 28;
+    const bearing = truck.bearing || truck.direction || 0;
+    
+    return {
       html: `
         <div style="
-          transform: rotate(${truck.bearing || 0}deg);
+          transform: rotate(${bearing}deg);
           color: ${color};
           font-size: ${size}px;
-          text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+          text-shadow: 2px 2px 4px rgba(0,0,0,0.7);
           transition: all 0.3s ease;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
         ">🚛</div>
       `,
       className: 'truck-marker',
-      iconSize: [32, 32],
-      iconAnchor: [16, 16]
-    });
-  };
-
-  const createPopupContent = (truck) => {
-    return `
-      <div style="font-family: Arial, sans-serif; min-width: 200px;">
-        <h3 style="margin: 0 0 8px 0; color: #dc2626; font-size: 16px;">
-          🚛 ${truck.id || truck.truckId}
-        </h3>
-        <div style="font-size: 14px;">
-          <p style="margin: 2px 0;"><strong>Speed:</strong> ${truck.speed || 0} km/h</p>
-          <p style="margin: 2px 0;"><strong>Weight:</strong> ${truck.weight || 0} kg</p>
-          <p style="margin: 2px 0;"><strong>Status:</strong> ${truck.status || 'Unknown'}</p>
-          <p style="margin: 2px 0;"><strong>Driver:</strong> ${truck.driver || 'N/A'}</p>
-          ${truck.destination ? `<p style="margin: 2px 0;"><strong>Destination:</strong> ${truck.destination}</p>` : ''}
-        </div>
-        <div style="margin-top: 8px; display: flex; gap: 4px;">
-          <button 
-            onclick="window.selectTruck('${truck.id || truck.truckId}')"
-            style="
-              padding: 4px 8px;
-              background: #dc2626;
-              color: white;
-              border: none;
-              border-radius: 4px;
-              cursor: pointer;
-              font-size: 12px;
-              flex: 1;
-            "
-          >
-            Select
-          </button>
-          <button 
-            onclick="window.setDestination('${truck.id || truck.truckId}')"
-            style="
-              padding: 4px 8px;
-              background: #059669;
-              color: white;
-              border: none;
-              border-radius: 4px;
-              cursor: pointer;
-              font-size: 12px;
-              flex: 1;
-            "
-          >
-            Set Route
-          </button>
-        </div>
-      </div>
-    `;
-  };
-
- useEffect(() => {
-  if (!mapLoaded || !map.current || !trucks) return;
-
-  window.selectTruck = (truckId) => {
-    const truck = trucks.find(t => (t.id || t.truckId) === truckId);
-    if (truck && onTruckSelect) {
-      onTruckSelect(truck);
-    }
-  };
-
-  window.setDestination = (truckId) => {
-    const truck = trucks.find(t => (t.id || t.truckId) === truckId);
-    if (truck && onTruckSelect) {
-      onTruckSelect(truck);
-      alert('Click on the map to set destination for this truck');
-    }
-  };
-
-  trucks.forEach(truck => {
-    const truckId = truck.id || truck.truckId;
-    let position = truck.position || truck.coordinates || [truck.lat, truck.lng];
-
-    if (!Array.isArray(position) || position.length !== 2 || 
-        typeof position[0] !== 'number' || typeof position[1] !== 'number' ||
-        isNaN(position[0]) || isNaN(position[1])) {
-      console.warn(`Skipping invalid position for truck ${truckId}:`, position);
-      return;
-    }
-
-    if (truckMarkers.current[truckId]) {
-      truckMarkers.current[truckId].setLatLng(position);
-      truckMarkers.current[truckId].setIcon(createTruckIcon(truck));
-      truckMarkers.current[truckId].setPopupContent(createPopupContent(truck));
-    } else {
-      const marker = L.marker(position, {
-        icon: createTruckIcon(truck)
-      })
-        .addTo(map.current)
-        .bindPopup(createPopupContent(truck))
-        .on('click', () => {
-          if (onTruckSelect) onTruckSelect(truck);
-        });
-
-      truckMarkers.current[truckId] = marker;
-    }
-  });
-
-  Object.keys(truckMarkers.current).forEach(truckId => {
-    if (!trucks.find(t => (t.id || t.truckId) === truckId)) {
-      map.current.removeLayer(truckMarkers.current[truckId]);
-      delete truckMarkers.current[truckId];
-    }
-  });
-
-  if (
-    selectedTruck &&
-    selectedTruck.position &&
-    Array.isArray(selectedTruck.position) &&
-    selectedTruck.position.length === 2 &&
-    typeof selectedTruck.position[0] === 'number' &&
-    typeof selectedTruck.position[1] === 'number'
-  ) {
-    map.current.setView(selectedTruck.position, 15);
-  }
-}, [trucks, selectedTruck, mapLoaded, onTruckSelect]);
-
-
-  useEffect(() => {
-    if (!mapRef.current || map.current) return;
-    map.current = L.map(mapRef.current, {
-      center: [36.8065, 10.1815],
-      zoom: 10,
-      zoomControl: true
-    });
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap contributors',
-      maxZoom: 18
-    }).addTo(map.current);
-
-    map.current.on('click', (e) => {
-      if (selectedTruck && onRequestRoute) {
-        const destination = {
-          lat: e.latlng.lat,
-          lng: e.latlng.lng
-        };
-        onRequestRoute(selectedTruck, destination);
-      }
-    });
-
-    setMapLoaded(true);
-
-    return () => {
-      if (map.current) {
-        map.current.remove();
-        map.current = null;
-      }
+      iconSize: [40, 40],
+      iconAnchor: [20, 20]
     };
-  }, []); 
+  };
 
+  const getRouteColor = (truck) => {
+    const isSelected = selectedTruck?.id === truck.id || 
+                      selectedTruck?.truckId === truck.truckId || 
+                      selectedTruck?.truck_id === truck.truck_id;
+    
+    if (isSelected) return '#dc2626';
+    if (truck.state === 'En Route') return '#059669';
+    if (truck.state === 'At Destination') return '#6b7280';
+    return '#3b82f6';
+  };
+
+  const renderTruckRoute = (truck) => {
+    if (!showRoutes || !truck.route || !Array.isArray(truck.route) || truck.route.length < 2) {
+      return null;
+    }
+
+    const routePoints = truck.route.map(point => [point.latitude, point.longitude]);
+    const color = getRouteColor(truck);
+    const isSelected = selectedTruck?.id === truck.id || 
+                      selectedTruck?.truckId === truck.truckId || 
+                      selectedTruck?.truck_id === truck.truck_id;
+
+    return (
+      <React.Fragment key={`route-${truck.truck_id || truck.id}`}>
+        {/* Full route line */}
+        <Polyline
+          positions={routePoints}
+          color={color}
+          weight={isSelected ? 4 : 2}
+          opacity={isSelected ? 0.8 : 0.5}
+          dashArray={truck.state === 'At Destination' ? '5, 5' : null}
+        />
+        
+        {/* Start point */}
+        <CircleMarker
+          center={routePoints[0]}
+          radius={6}
+          color={color}
+          fillColor="#ffffff"
+          fillOpacity={1}
+          weight={2}
+        >
+          <Popup>
+            <div style={{ fontFamily: 'Arial, sans-serif' }}>
+              <strong>🏁 Start Point</strong><br/>
+              {truck.truck_id || truck.id}<br/>
+              Tunis
+            </div>
+          </Popup>
+        </CircleMarker>
+        
+        {/* End point */}
+        <CircleMarker
+          center={routePoints[routePoints.length - 1]}
+          radius={6}
+          color={color}
+          fillColor={color}
+          fillOpacity={0.8}
+          weight={2}
+        >
+          <Popup>
+            <div style={{ fontFamily: 'Arial, sans-serif' }}>
+              <strong>🎯 Destination</strong><br/>
+              {truck.truck_id || truck.id}<br/>
+              {truck.destination || 'Unknown'}
+            </div>
+          </Popup>
+        </CircleMarker>
+      </React.Fragment>
+    );
+  };
+
+  const handleMapClick = (e) => {
+    if (selectedTruck && onRequestRoute) {
+      const destination = {
+        lat: e.latlng.lat,
+        lng: e.latlng.lng
+      };
+      console.log('Map clicked, setting destination:', destination, 'for truck:', selectedTruck);
+      onRequestRoute(selectedTruck, destination);
+    }
+  };
+
+  const renderTruckMarkers = () => {
+    if (!trucks || !Array.isArray(trucks) || !mapLoaded) {
+      console.log('Cannot render markers - trucks:', trucks, 'mapLoaded:', mapLoaded);
+      return null;
+    }
+
+    console.log('Rendering markers for', trucks.length, 'trucks');
+
+    return trucks.map(truck => {
+      const truckId = truck.truck_id || truck.truckId || truck.id;
+      
+      // Extract position from various possible formats
+      let position = null;
+      
+      if (truck.position && Array.isArray(truck.position) && truck.position.length === 2) {
+        position = truck.position;
+      } else if (truck.coordinates && Array.isArray(truck.coordinates) && truck.coordinates.length === 2) {
+        position = truck.coordinates;
+      } else if (typeof truck.lat === 'number' && typeof truck.lng === 'number') {
+        position = [truck.lat, truck.lng];
+      } else if (truck.gps && typeof truck.gps.latitude === 'number' && typeof truck.gps.longitude === 'number') {
+        position = [truck.gps.latitude, truck.gps.longitude];
+      }
+
+      // Validate position
+      if (!position || !Array.isArray(position) || position.length !== 2 || 
+          typeof position[0] !== 'number' || typeof position[1] !== 'number' ||
+          isNaN(position[0]) || isNaN(position[1]) ||
+          position[0] === 0 || position[1] === 0) {
+        console.warn(`Invalid or zero position for truck ${truckId}:`, position, truck);
+        return null;
+      }
+
+      console.log(`Creating marker for truck ${truckId} at position [${position[0]}, ${position[1]}]`);
+
+      const isSelected = selectedTruck?.id === truck.id || 
+                        selectedTruck?.truckId === truck.truckId || 
+                        selectedTruck?.truck_id === truck.truck_id;
+
+      return (
+        <React.Fragment key={truckId}>
+          {/* Render route first (so it appears under the marker) */}
+          {renderTruckRoute(truck)}
+          
+          {/* Render truck marker */}
+          <Marker 
+            position={position}
+            icon={L.divIcon(createTruckIcon(truck))}
+            eventHandlers={{
+              click: () => {
+                console.log('Truck marker clicked:', truckId);
+                if (onTruckSelect) onTruckSelect(truck);
+              }
+            }}
+          >
+            <Popup>
+              <div style={{fontFamily: 'Arial, sans-serif', minWidth: '250px'}}>
+                <h3 style={{
+                  margin: '0 0 12px 0', 
+                  color: '#dc2626', 
+                  fontSize: '18px',
+                  borderBottom: '2px solid #dc2626',
+                  paddingBottom: '8px'
+                }}>
+                  🚛 {truckId}
+                </h3>
+                
+                <div style={{fontSize: '14px', lineHeight: '1.5'}}>
+                  <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px'}}>
+                    <div>
+                      <strong>Driver:</strong><br/>
+                      <span style={{color: '#059669'}}>{truck.driver || 'N/A'}</span>
+                    </div>
+                    <div>
+                      <strong>Plate:</strong><br/>
+                      <span style={{color: '#059669'}}>{truck.plate || 'N/A'}</span>
+                    </div>
+                    <div>
+                      <strong>Status:</strong><br/>
+                      <span style={{
+                        color: truck.state === 'En Route' ? '#059669' : 
+                               truck.state === 'At Destination' ? '#6b7280' : '#dc2626',
+                        fontWeight: 'bold'
+                      }}>
+                        {truck.state || truck.status || 'Unknown'}
+                      </span>
+                    </div>
+                    <div>
+                      <strong>Speed:</strong><br/>
+                      <span style={{color: '#3b82f6'}}>{Math.round(truck.speed || 0)} km/h</span>
+                    </div>
+                    <div>
+                      <strong>Weight:</strong><br/>
+                      <span style={{color: '#f59e0b'}}>{Math.round(truck.weight || 0)} kg</span>
+                    </div>
+                    <div>
+                      <strong>Progress:</strong><br/>
+                      <span style={{color: '#8b5cf6'}}>{(truck.route_progress || 0).toFixed(1)}%</span>
+                    </div>
+                  </div>
+                  
+                  {truck.destination && (
+                    <div style={{marginTop: '8px', padding: '8px', backgroundColor: '#f3f4f6', borderRadius: '4px'}}>
+                      <strong>🎯 Destination:</strong> {truck.destination}
+                    </div>
+                  )}
+                </div>
+                
+                <div style={{marginTop: '12px', display: 'flex', gap: '6px'}}>
+                  <button 
+                    onClick={() => {
+                      if (onTruckSelect) onTruckSelect(truck);
+                    }}
+                    style={{
+                      padding: '8px 12px',
+                      background: isSelected ? '#dc2626' : '#059669',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      fontSize: '12px',
+                      fontWeight: 'bold',
+                      flex: 1,
+                      transition: 'all 0.2s'
+                    }}
+                  >
+                    {isSelected ? '✓ Selected' : 'Select Truck'}
+                  </button>
+                  <button 
+                    onClick={() => {
+                      if (onTruckSelect) onTruckSelect(truck);
+                      alert('🗺️ Click anywhere on the map to set a new destination for this truck');
+                    }}
+                    style={{
+                      padding: '8px 12px',
+                      background: '#3b82f6',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      fontSize: '12px',
+                      fontWeight: 'bold',
+                      flex: 1,
+                      transition: 'all 0.2s'
+                    }}
+                  >
+                    Set Route
+                  </button>
+                </div>
+              </div>
+            </Popup>
+          </Marker>
+        </React.Fragment>
+      );
+    }).filter(Boolean);
+  };
 
   return (
-    <div className="relative w-full h-full">
-      <div 
-        ref={mapRef}
-        className="w-full h-full"
-        style={{ minHeight: '400px' }}
-      />
-      
-      {/* Map Controls */}
-      <div className="absolute top-4 right-4 bg-white p-3 rounded-lg shadow-lg">
-        <h3 className="font-semibold text-gray-900 mb-2 text-sm">Map Legend</h3>
-        <div className="space-y-2 text-xs">
-          <div className="flex items-center space-x-2">
-            <span className="text-lg">🚛</span>
-            <span>Truck Position</span>
-          </div>
-          <div className="flex items-center space-x-2">
-            <div className="w-4 h-1 bg-red-600 opacity-80" style={{ borderStyle: 'dashed', borderWidth: '1px 0' }}></div>
-            <span>Planned Route</span>
-          </div>
-          <div className="flex items-center space-x-2">
-            <div className="w-3 h-3 bg-red-600 rounded-full"></div>
-            <span>Selected Truck</span>
-          </div>
-          <div className="flex items-center space-x-2">
-            <div className="w-3 h-3 bg-green-600 rounded-full"></div>
-            <span>Other Trucks</span>
-          </div>
+    <div style={{ position: 'relative', height: '100vh', width: '100%' }}>
+      {/* Controls */}
+      <div style={{
+        position: 'absolute',
+        top: '20px',
+        right: '20px',
+        zIndex: 1000,
+        background: 'white',
+        padding: '12px',
+        borderRadius: '8px',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '12px'
+      }}>
+        <label style={{ fontSize: '14px', fontWeight: 'bold', color: '#374151' }}>
+          <input
+            type="checkbox"
+            checked={showRoutes}
+            onChange={(e) => setShowRoutes(e.target.checked)}
+            style={{ marginRight: '6px' }}
+          />
+          Show Routes
+        </label>
+        <div style={{ fontSize: '12px', color: '#6b7280' }}>
+          Trucks: {trucks ? trucks.length : 0}
         </div>
       </div>
 
-      {/* Truck Counter */}
-      <div className="absolute top-4 left-4 bg-white p-3 rounded-lg shadow-lg">
-        <div className="flex items-center space-x-2">
-          <span className="text-lg">🚛</span>
-          <span className="font-semibold text-gray-900">
-            {trucks ? trucks.length : 0} Active Trucks
-          </span>
-        </div>
-      </div>
-
-      {/* Map Instructions */}
+      {/* Status indicator */}
       {selectedTruck && (
-        <div className="absolute bottom-4 left-4 bg-blue-600 text-white p-3 rounded-lg shadow-lg max-w-xs">
-          <p className="text-sm font-medium">
-            Click anywhere on the map to set destination for {selectedTruck.id || selectedTruck.truckId}
-          </p>
+        <div style={{
+          position: 'absolute',
+          top: '20px',
+          left: '20px',
+          zIndex: 1000,
+          background: '#dc2626',
+          color: 'white',
+          padding: '8px 16px',
+          borderRadius: '6px',
+          fontSize: '14px',
+          fontWeight: 'bold'
+        }}>
+          🚛 Selected: {selectedTruck.truck_id || selectedTruck.id}
+          <div style={{ fontSize: '12px', opacity: 0.9 }}>
+            Click map to set destination
+          </div>
         </div>
       )}
+
+       <MapContainer 
+      center={[36.8065, 10.1815]} 
+      zoom={8} 
+      scrollWheelZoom={true}
+      style={{ height: '100vh', width: '100%' }}
+      ref={mapRef}
+      >
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        />
+        
+        {/* Render all truck markers and routes */}
+        {renderTruckMarkers()}
+        
+        {/* Reference marker for Tunis */}
+        <CircleMarker
+          center={[36.8065, 10.1815]}
+          radius={8}
+          color="#dc2626"
+          fillColor="#dc2626"
+          fillOpacity={0.8}
+          weight={2}
+        >
+          <Popup>
+            <div style={{ fontFamily: 'Arial, sans-serif', textAlign: 'center' }}>
+              <strong>📍 Tunis</strong><br/>
+              Starting point for all routes
+            </div>
+          </Popup>
+        </CircleMarker>
+      </MapContainer>
     </div>
   );
 };
