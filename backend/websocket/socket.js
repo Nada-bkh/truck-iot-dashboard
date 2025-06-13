@@ -1,6 +1,15 @@
 const { Server } = require('socket.io');
 const { runConsumer } = require('../kafka/consumer');
+const { Kafka } = require('kafkajs');
 const axios = require('axios');
+
+// Kafka producer for sending route updates to simulation
+const kafka = new Kafka({
+  clientId: 'route-update-producer',
+  brokers: [process.env.KAFKA_BROKERS || 'kafka:9092'],
+});
+
+const routeProducer = kafka.producer();
 
 const initializeWebSocket = (server) => {
   const io = new Server(server, {
@@ -9,6 +18,11 @@ const initializeWebSocket = (server) => {
       methods: ['GET', 'POST'],
     },
   });
+
+  // Initialize Kafka producer
+  routeProducer.connect().then(() => {
+    console.log('✅ Route update producer connected to Kafka');
+  }).catch(console.error);
 
   io.on('connection', (socket) => {
     console.log('Client connected:', socket.id);
@@ -26,6 +40,7 @@ const initializeWebSocket = (server) => {
 
         console.log(`Setting route for truck ${truck_id} from [${departure.latitude}, ${departure.longitude}] to [${destination.latitude}, ${destination.longitude}]`);
 
+        // Get route from OSRM
         const response = await axios.get(
           `http://osrm:5000/route/v1/truck/${departure.longitude},${departure.latitude};${destination.longitude},${destination.latitude}?geometries=geojson&overview=full&steps=true`,
           {
@@ -43,6 +58,7 @@ const initializeWebSocket = (server) => {
           longitude: lon,
         }));
 
+        // Send route update to frontend
         io.emit('truckRouteUpdate', {
           truck_id,
           route: waypoints,
@@ -50,7 +66,26 @@ const initializeWebSocket = (server) => {
           duration: response.data.routes[0].duration,
         });
 
-        console.log(`Route set for ${truck_id}: ${waypoints.length} waypoints, ${Math.round(response.data.routes[0].distance / 1000)} km`);
+        // Send route update to Python simulation via Kafka
+        const routeUpdateMessage = {
+          truck_id,
+          route: waypoints,
+          destination_name: `Custom Destination (${destination.latitude.toFixed(4)}, ${destination.longitude.toFixed(4)})`,
+          timestamp: new Date().toISOString(),
+          distance: response.data.routes[0].distance,
+          duration: response.data.routes[0].duration
+        };
+
+        await routeProducer.send({
+          topic: 'truck-route-updates',
+          messages: [{
+            key: truck_id,
+            value: JSON.stringify(routeUpdateMessage),
+          }],
+        });
+
+        console.log(`✅ Route set for ${truck_id}: ${waypoints.length} waypoints, ${Math.round(response.data.routes[0].distance / 1000)} km`);
+        console.log(`📨 Route update sent to simulation via Kafka`);
 
       } catch (error) {
         console.error('Error fetching route:', error.message);

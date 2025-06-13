@@ -1,7 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, CircleMarker } from 'react-leaflet';
 import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 
+// Fix for default markers in React Leaflet
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+});
 
 const TruckMap = ({ trucks, selectedTruck, onTruckSelect, onRequestRoute, socket }) => {
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -27,7 +35,7 @@ const TruckMap = ({ trucks, selectedTruck, onTruckSelect, onRequestRoute, socket
     const size = isSelected ? 32 : 28;
     const bearing = truck.bearing || truck.direction || 0;
     
-    return {
+    return L.divIcon({
       html: `
         <div style="
           transform: rotate(${bearing}deg);
@@ -44,7 +52,7 @@ const TruckMap = ({ trucks, selectedTruck, onTruckSelect, onRequestRoute, socket
       className: 'truck-marker',
       iconSize: [40, 40],
       iconAnchor: [20, 20]
-    };
+    });
   };
 
   const getRouteColor = (truck) => {
@@ -177,7 +185,7 @@ const TruckMap = ({ trucks, selectedTruck, onTruckSelect, onRequestRoute, socket
           {/* Render truck marker */}
           <Marker 
             position={position}
-            icon={L.divIcon(createTruckIcon(truck))}
+            icon={createTruckIcon(truck)}
             eventHandlers={{
               click: () => {
                 console.log('Truck marker clicked:', truckId);
@@ -288,7 +296,7 @@ const TruckMap = ({ trucks, selectedTruck, onTruckSelect, onRequestRoute, socket
   };
 
   return (
-    <div style={{ position: 'relative', height: '100vh', width: '100%' }}>
+    <div style={{ height: '100vh', width: '100%', position: 'relative' }}>
       {/* Controls */}
       <div style={{
         position: 'absolute',
@@ -338,12 +346,15 @@ const TruckMap = ({ trucks, selectedTruck, onTruckSelect, onRequestRoute, socket
         </div>
       )}
 
-       <MapContainer 
-      center={[36.8065, 10.1815]} 
-      zoom={8} 
-      scrollWheelZoom={true}
-      style={{ height: '100vh', width: '100%' }}
-      ref={mapRef}
+      <MapContainer 
+        center={[36.8065, 10.1815]} 
+        zoom={8} 
+        scrollWheelZoom={true}
+        style={{ height: '100%', width: '100%' }}
+        ref={mapRef}
+        eventHandlers={{
+          click: handleMapClick
+        }}
       >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -374,4 +385,4 @@ const TruckMap = ({ trucks, selectedTruck, onTruckSelect, onRequestRoute, socket
   );
 };
 
-export default TruckMap;
+export default TruckMap;  
