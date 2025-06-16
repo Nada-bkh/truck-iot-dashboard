@@ -33,49 +33,69 @@ const initializeWebSocket = (server) => {
       try {
         const { departure, destination, truck_id } = route;
 
+        console.log('📍 Received setRoute request:', {
+          truck_id,
+          departure,
+          destination
+        });
+
         if (!departure?.longitude || !departure?.latitude || 
             !destination?.longitude || !destination?.latitude) {
           throw new Error('Invalid route coordinates');
         }
 
-        console.log(`Setting route for truck ${truck_id} from [${departure.latitude}, ${departure.longitude}] to [${destination.latitude}, ${destination.longitude}]`);
-
-        // Get route from OSRM
-        const response = await axios.get(
-          `http://osrm:5000/route/v1/truck/${departure.longitude},${departure.latitude};${destination.longitude},${destination.latitude}?geometries=geojson&overview=full&steps=true`,
-          {
-            timeout: 10000,
-            headers: { 'Accept': 'application/json' },
-          }
-        );
-
-        if (!response.data.routes[0]) {
-          throw new Error('No valid route found');
+        if (!truck_id) {
+          throw new Error('Missing truck_id');
         }
 
-        const waypoints = response.data.routes[0].geometry.coordinates.map(([lon, lat]) => ({
+        console.log(`🗺️  Setting route for truck ${truck_id}`);
+        console.log(`   From: [${departure.latitude}, ${departure.longitude}]`);
+        console.log(`   To: [${destination.latitude}, ${destination.longitude}]`);
+
+        // Get route from OSRM
+        const osrmUrl = `http://osrm:5000/route/v1/truck/${departure.longitude},${departure.latitude};${destination.longitude},${destination.latitude}?geometries=geojson&overview=full&steps=true`;
+        console.log(`🚀 Requesting OSRM route: ${osrmUrl}`);
+
+        const response = await axios.get(osrmUrl, {
+          timeout: 15000,
+          headers: { 'Accept': 'application/json' },
+        });
+
+        if (!response.data.routes || !response.data.routes[0]) {
+          throw new Error('No valid route found from OSRM');
+        }
+
+        const route_data = response.data.routes[0];
+        const waypoints = route_data.geometry.coordinates.map(([lon, lat]) => ({
           latitude: lat,
           longitude: lon,
         }));
 
-        // Send route update to frontend
-        io.emit('truckRouteUpdate', {
-          truck_id,
-          route: waypoints,
-          distance: response.data.routes[0].distance,
-          duration: response.data.routes[0].duration,
-        });
+        console.log(`✅ OSRM returned route with ${waypoints.length} waypoints`);
+        console.log(`   Distance: ${Math.round(route_data.distance / 1000)} km`);
+        console.log(`   Duration: ${Math.round(route_data.duration / 60)} minutes`);
 
-        // Send route update to Python simulation via Kafka
+        // Create route update message for Python simulation
         const routeUpdateMessage = {
           truck_id,
           route: waypoints,
           destination_name: `Custom Destination (${destination.latitude.toFixed(4)}, ${destination.longitude.toFixed(4)})`,
           timestamp: new Date().toISOString(),
-          distance: response.data.routes[0].distance,
-          duration: response.data.routes[0].duration
+          distance: route_data.distance,
+          duration: route_data.duration,
+          departure: {
+            latitude: departure.latitude,
+            longitude: departure.longitude
+          },
+          destination: {
+            latitude: destination.latitude,
+            longitude: destination.longitude
+          }
         };
 
+        console.log('📨 Sending route update to Python simulation via Kafka...');
+
+        // Send route update to Python simulation via Kafka
         await routeProducer.send({
           topic: 'truck-route-updates',
           messages: [{
@@ -84,14 +104,38 @@ const initializeWebSocket = (server) => {
           }],
         });
 
-        console.log(`✅ Route set for ${truck_id}: ${waypoints.length} waypoints, ${Math.round(response.data.routes[0].distance / 1000)} km`);
-        console.log(`📨 Route update sent to simulation via Kafka`);
+        console.log(`✅ Route update sent to simulation for ${truck_id}`);
+
+        // Send route update to frontend for immediate display
+        const frontendRouteUpdate = {
+          truck_id,
+          route: waypoints,
+          distance: route_data.distance,
+          duration: route_data.duration,
+          destination_name: routeUpdateMessage.destination_name,
+          timestamp: routeUpdateMessage.timestamp
+        };
+
+        io.emit('truckRouteUpdate', frontendRouteUpdate);
+        console.log(`📱 Route update sent to frontend for ${truck_id}`);
+
+        // Send success response to requesting client
+        socket.emit('routeSetSuccess', {
+          truck_id,
+          message: `Route set successfully for ${truck_id}`,
+          waypoints: waypoints.length,
+          distance: Math.round(route_data.distance / 1000),
+          duration: Math.round(route_data.duration / 60)
+        });
 
       } catch (error) {
-        console.error('Error fetching route:', error.message);
+        console.error('❌ Error setting route:', error.message);
+        console.error('❌ Full error:', error);
+        
         socket.emit('routeError', {
           message: error.message,
           truck_id: route?.truck_id || null,
+          details: error.response?.data || null
         });
       }
     });
