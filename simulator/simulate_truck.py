@@ -15,7 +15,6 @@ conf = {
 }
 producer = Producer(conf)
 
-# Consumer configuration for route updates
 consumer_conf = {
     'bootstrap.servers': os.getenv('KAFKA_BROKERS', 'kafka:9092'),
     'group.id': 'truck-route-consumer',
@@ -23,46 +22,48 @@ consumer_conf = {
 }
 route_consumer = Consumer(consumer_conf)
 
-# Initialize trucks - ALL START IDLE with NO ROUTES
 trucks = [
     {
         'truck_id': 'truck_001',
         'plate': 'TUN-1234',
         'driver': 'Ahmed Ben Ali',
         'state': 'Idle',
-        'route': [],  # Empty - no initial route
+        'route': [],
         'weight': random.uniform(5000, 20000),
         'loaded': True,
-        'current_waypoint_index': 0,  # Current waypoint index
-        'progress_on_segment': 0.0,   # Progress between current and next waypoint (0-1)
+        'current_waypoint_index': 0,
+        'progress_on_segment': 0.0,
         'destination_name': 'Waiting for assignment',
-        'current_position': {'latitude': 36.8000, 'longitude': 10.1800}  # Tunis
+        'current_position': {'latitude': 36.8000, 'longitude': 10.1800},
+        'base_speed': random.uniform(45, 65)
     },
     {
         'truck_id': 'truck_002',
         'plate': 'TUN-5678',
         'driver': 'Fatma Cherif',
         'state': 'Idle',
-        'route': [],  # Empty - no initial route
+        'route': [],
         'weight': random.uniform(5000, 20000),
         'loaded': True,
         'current_waypoint_index': 0,
         'progress_on_segment': 0.0,
         'destination_name': 'Waiting for assignment',
-        'current_position': {'latitude': 36.7500, 'longitude': 10.1500}  # Slightly different position
+        'current_position': {'latitude': 36.7500, 'longitude': 10.1500},
+        'base_speed': random.uniform(45, 65)
     },
     {
         'truck_id': 'truck_003',
         'plate': 'TUN-9012',
         'driver': 'Mohamed Trabelsi',
         'state': 'Idle',
-        'route': [],  # Empty - no initial route
+        'route': [],
         'weight': random.uniform(5000, 20000),
         'loaded': True,
         'current_waypoint_index': 0,
         'progress_on_segment': 0.0,
         'destination_name': 'Waiting for assignment',
-        'current_position': {'latitude': 36.8200, 'longitude': 10.2000}  # Slightly different position
+        'current_position': {'latitude': 36.8200, 'longitude': 10.2000},
+        'base_speed': random.uniform(45, 65)
     },
 ]
 
@@ -71,7 +72,7 @@ def delivery_report(err, msg):
         print(f'Message delivery failed: {err}')
 
 def calculate_distance(point1, point2):
-    """Calculate distance between two GPS coordinates in kilometers"""
+    """Calculate distance between two GPS coordinates in kilometers using Haversine formula"""
     lat1, lon1 = math.radians(point1['latitude']), math.radians(point1['longitude'])
     lat2, lon2 = math.radians(point2['latitude']), math.radians(point2['longitude'])
     
@@ -81,7 +82,6 @@ def calculate_distance(point1, point2):
     a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
     c = 2 * math.asin(math.sqrt(a))
     
-    # Radius of earth in kilometers
     r = 6371
     return c * r
 
@@ -107,21 +107,18 @@ def create_route_from_current_position(truck, new_route):
         return []
     
     current_pos = truck['current_position']
-    destination = new_route[-1]  # Last point is the destination
+    destination = new_route[-1]
     
     print(f'🗺️  Creating route from current position [{current_pos["latitude"]:.4f}, {current_pos["longitude"]:.4f}] to destination [{destination["latitude"]:.4f}, {destination["longitude"]:.4f}]')
     
-    # If the new route already starts near the current position, use it as-is
     first_point = new_route[0]
     distance_to_start = calculate_distance(current_pos, first_point)
     
-    if distance_to_start < 0.1:  # Less than 100 meters
+    if distance_to_start < 0.1:
         print(f'✅ Using provided route as-is (starts near current position)')
         return new_route
     
-    # Otherwise, create a route that starts from current position
     try:
-        # Get OSRM route from current position to destination
         host = os.getenv('OSRM_HOST', 'osrm')
         port = os.getenv('OSRM_PORT', '5000')
         profile = os.getenv('OSRM_PROFILE', 'truck')
@@ -141,7 +138,6 @@ def create_route_from_current_position(truck, new_route):
             
     except Exception as e:
         print(f'❌ Failed to get OSRM route from current position: {e}')
-        # Fallback: create simple direct route
         print(f'📍 Using fallback direct route')
         return [
             current_pos,
@@ -163,10 +159,8 @@ def update_truck_route(truck_id, new_route, destination_name=None):
         print(f'⚠️  Empty route provided for {truck_id}')
         return
     
-    # Create route from current position to new destination
     optimized_route = create_route_from_current_position(truck, new_route)
     
-    # Update truck parameters
     truck['route'] = optimized_route
     truck['current_waypoint_index'] = 0
     truck['progress_on_segment'] = 0.0
@@ -225,66 +219,54 @@ def listen_for_route_updates():
     finally:
         route_consumer.close()
 
-def simulate_truck_movement(truck, speed_kmh=50):
-    """Simulate truck movement along the route"""
+def simulate_truck_movement(truck, time_interval=2.0):
+    """Simulate truck movement along the route with realistic speed"""
     if not truck['route'] or len(truck['route']) < 2:
-        return truck['current_position'], 0, False  # No movement if no route
+        return truck['current_position'], 0, False
     
-    # Convert speed from km/h to degrees per second (approximate)
-    # 1 degree ≈ 111 km, so speed in degrees/second = speed_kmh / (111 * 3600)
-    speed_deg_per_sec = speed_kmh / (111 * 3600)
-    
-    # Time interval (2 seconds based on your sleep interval)
-    time_interval = 2.0
-    
-    # Calculate how much we should move in this interval
-    movement_distance = speed_deg_per_sec * time_interval
+    base_speed = truck['base_speed']
+    speed_variation = random.uniform(-5, 5)
+    current_speed_kmh = max(20, min(80, base_speed + speed_variation))
     
     current_waypoint_idx = truck['current_waypoint_index']
     progress = truck['progress_on_segment']
     
-    # Check if we've reached the end
     if current_waypoint_idx >= len(truck['route']) - 1:
         truck['progress_on_segment'] = 1.0
         return truck['route'][-1], calculate_bearing(truck['route'][-2], truck['route'][-1]), True
     
-    # Get current segment
     start_point = truck['route'][current_waypoint_idx]
     end_point = truck['route'][current_waypoint_idx + 1]
     
-    # Calculate distance of current segment
-    segment_distance = calculate_distance(start_point, end_point)
+    segment_distance_km = calculate_distance(start_point, end_point)
     
-    # If segment is very short, skip to next waypoint
-    if segment_distance < 0.001:  # Less than 1 meter
+    if segment_distance_km < 0.001:
         truck['current_waypoint_index'] += 1
         truck['progress_on_segment'] = 0.0
-        return simulate_truck_movement(truck, speed_kmh)
+        return simulate_truck_movement(truck, time_interval)
     
-    # Calculate progress increment based on movement distance
-    progress_increment = movement_distance / segment_distance if segment_distance > 0 else 1.0
+    # Distance = speed * time (convert time_interval from seconds to hours)
+    distance_to_move_km = current_speed_kmh * (time_interval / 3600.0)
     
-    # Update progress
+    progress_increment = distance_to_move_km / segment_distance_km if segment_distance_km > 0 else 1.0
+    
     new_progress = progress + progress_increment
     
     if new_progress >= 1.0:
-        # Move to next waypoint
         truck['current_waypoint_index'] += 1
         truck['progress_on_segment'] = 0.0
         
-        # Check if we've reached the destination
         if truck['current_waypoint_index'] >= len(truck['route']) - 1:
             return truck['route'][-1], calculate_bearing(start_point, end_point), True
         
-        # Continue with remaining movement
-        remaining_progress = new_progress - 1.0
-        truck['progress_on_segment'] = remaining_progress
-        return simulate_truck_movement(truck, speed_kmh)
+        remaining_distance = (new_progress - 1.0) * segment_distance_km
+        if remaining_distance > 0.001:
+            return simulate_truck_movement(truck, time_interval)
+        else:
+            return simulate_truck_movement(truck, time_interval)
     else:
-        # Update progress on current segment
         truck['progress_on_segment'] = new_progress
         
-        # Calculate current position
         current_position = get_interpolated_position(start_point, end_point, new_progress)
         bearing = current_position.get('bearing', 0)
         
@@ -294,20 +276,16 @@ def simulate_truck_data(truck):
     """Simulate truck data - trucks only move when they have a route assigned"""
     
     if not truck['route'] or len(truck['route']) < 2:
-        # Truck has no route - stays idle at current position
         gps = truck['current_position']
         truck['state'] = 'Idle'
         speed = 0
         bearing = 0
         is_at_destination = False
     else:
-        # Truck has a route - simulate movement
-        speed = random.uniform(60, 150)  # km/h
+        time_interval = 2.0
         
-        # Simulate movement
-        new_position, bearing, reached_destination = simulate_truck_movement(truck, speed)
+        new_position, bearing, reached_destination = simulate_truck_movement(truck, time_interval)
         
-        # Update truck's current position
         truck['current_position'] = {
             'latitude': new_position['latitude'],
             'longitude': new_position['longitude']
@@ -318,19 +296,19 @@ def simulate_truck_data(truck):
         if reached_destination:
             truck['state'] = 'At Destination'
             truck['loaded'] = False
-            truck['weight'] = random.uniform(0, 1000)  # Unloaded
+            truck['weight'] = random.uniform(0, 1000)
             speed = 0
             is_at_destination = True
         else:
             truck['state'] = 'En Route'
+            speed = truck['base_speed'] + random.uniform(-5, 5)
+            speed = max(20, min(80, speed))
             is_at_destination = False
 
-    # Ensure GPS coordinates are valid
     if not (-90 <= gps['latitude'] <= 90) or not (-180 <= gps['longitude'] <= 180):
         print(f'⚠️  Invalid GPS coordinates for {truck["truck_id"]}: {gps}')
-        gps = truck['current_position']  # Use last known good position
+        gps = truck['current_position']
 
-    # Calculate route progress
     if truck['route'] and len(truck['route']) > 1:
         total_waypoints = len(truck['route']) - 1
         current_waypoint = truck['current_waypoint_index']
@@ -343,7 +321,6 @@ def simulate_truck_data(truck):
     else:
         route_progress = 0.0
 
-    # Create truck data payload
     truck_data = {
         'truck_id': truck['truck_id'],
         'truckId': truck['truck_id'],
@@ -371,7 +348,6 @@ def simulate_truck_data(truck):
         'current_waypoint': truck['current_waypoint_index'] if truck['route'] else 0
     }
     
-    # Add route endpoints if route exists
     if truck['route']:
         truck_data['departure_latitude'] = truck['route'][0]['latitude']
         truck_data['departure_longitude'] = truck['route'][0]['longitude']
@@ -393,10 +369,8 @@ def produce_truck_data():
                 data = simulate_truck_data(truck)
 
                 if data:
-                    # Send to Kafka
                     producer.produce(topic, json.dumps(data).encode('utf-8'), callback=delivery_report)
 
-                    # Log truck status
                     if truck['state'] == 'Idle':
                         print(f'⏸️  {data["truck_id"]} → {data["state"]} → [{data["lat"]:.5f}, {data["lng"]:.5f}] → {data["destination"]}')
                     elif truck['state'] == 'En Route':
@@ -431,7 +405,7 @@ if __name__ == '__main__':
     print('📍 All trucks start IDLE and will only move when routes are assigned from frontend')
     print('🎯 Trucks available:')
     for truck in trucks:
-        print(f'   - {truck["truck_id"]} ({truck["plate"]}) - Driver: {truck["driver"]} - Position: [{truck["current_position"]["latitude"]:.4f}, {truck["current_position"]["longitude"]:.4f}]')
+        print(f'   - {truck["truck_id"]} ({truck["plate"]}) - Driver: {truck["driver"]} - Position: [{truck["current_position"]["latitude"]:.4f}, {truck["current_position"]["longitude"]:.4f}] - Base Speed: {truck["base_speed"]:.1f} km/h')
     
     # Start route update listener in a separate thread
     route_thread = threading.Thread(target=listen_for_route_updates, daemon=True)
