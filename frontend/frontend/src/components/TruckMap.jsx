@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, CircleMarker } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import MultiRoutingMachine from './RoutingMachine';
 
 // Fix for default markers in React Leaflet
 delete L.Icon.Default.prototype._getIconUrl;
@@ -27,12 +28,86 @@ const TruckMap = ({ trucks, selectedTruck, onTruckSelect, onRequestRoute, socket
   const [showRoutes, setShowRoutes] = useState(true);
   const [followTruck, setFollowTruck] = useState(true);
   const [previousPositions, setPreviousPositions] = useState({});
+  const [availableRoutes, setAvailableRoutes] = useState({});
+  const [selectedRoutes, setSelectedRoutes] = useState({});
+  const [showRouteComparison, setShowRouteComparison] = useState(false);
   const mapRef = useRef(null);
   const followTimeoutRef = useRef(null);
 
   useEffect(() => {
     setMapLoaded(true);
   }, []);
+
+  // Listen for multi-route updates from backend
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleMultiRouteUpdate = (data) => {
+      console.log('📍 Received multi-route update:', data);
+      
+      setAvailableRoutes(prev => ({
+        ...prev,
+        [data.truck_id]: {
+          routes: data.routes,
+          mainRoute: data.mainRoute,
+          destination: data.destination_name,
+          timestamp: data.timestamp,
+          totalAlternatives: data.totalAlternatives
+        }
+      }));
+
+      // Auto-select the main route for the truck
+      setSelectedRoutes(prev => ({
+        ...prev,
+        [data.truck_id]: data.routes[0]?.id || null
+      }));
+
+      // Show route comparison if alternatives are available
+      if (data.totalAlternatives > 0) {
+        setShowRouteComparison(true);
+      }
+    };
+
+    socket.on('truckMultiRouteUpdate', handleMultiRouteUpdate);
+
+    return () => {
+      socket.off('truckMultiRouteUpdate', handleMultiRouteUpdate);
+    };
+  }, [socket]);
+
+  // Calculate real-time ETA for a route based on truck speed
+  const calculateRealTimeETA = (route, truck) => {
+    if (!route || !route.distanceKm) return { eta: 'N/A', remaining: 'N/A', speed: 0 };
+    
+    const currentSpeed = truck?.speed || 0;
+    const useSpeed = currentSpeed > 5 ? currentSpeed : route.avgSpeedKmh;
+    const timeHours = route.distanceKm / useSpeed;
+    const timeMinutes = timeHours * 60;
+    
+    // Account for route progress if available
+    const progress = truck?.route_progress || 0;
+    const remainingDistance = route.distanceKm * (1 - progress / 100);
+    const remainingTimeMinutes = (remainingDistance / useSpeed) * 60;
+    
+    const now = new Date();
+    const eta = new Date(now.getTime() + remainingTimeMinutes * 60000);
+    
+    return {
+      eta: eta.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      remaining: `${Math.round(remainingTimeMinutes)} min`,
+      speed: Math.round(useSpeed),
+      progress: progress,
+      remainingDistance: Math.round(remainingDistance * 10) / 10
+    };
+  };
+
+  // Handle route selection
+  const handleRouteSelect = (truckId, routeId) => {
+    setSelectedRoutes(prev => ({
+      ...prev,
+      [truckId]: routeId
+    }));
+  };
 
   // Enhanced auto-follow with smooth transitions
   useEffect(() => {
@@ -250,66 +325,86 @@ const TruckMap = ({ trucks, selectedTruck, onTruckSelect, onRequestRoute, socket
   };
 
   const renderTruckRoute = (truck) => {
-    if (!showRoutes || !truck.route || !Array.isArray(truck.route) || truck.route.length < 2) return null;
+    if (!showRoutes) return null;
 
-    const routePoints = truck.route.map(point => [point.latitude, point.longitude]);
-    const color = getRouteColor(truck);
-    const isSelected = selectedTruck?.id === truck.id || 
-                      selectedTruck?.truckId === truck.truckId || 
-                      selectedTruck?.truck_id === truck.truck_id;
+    const truckId = truck.truck_id || truck.truckId || truck.id;
+    const routeData = availableRoutes[truckId];
+    
+    if (!routeData || !routeData.routes) {
+      // Fallback to old route rendering if no multi-route data
+      if (!truck.route || !Array.isArray(truck.route) || truck.route.length < 2) return null;
 
+      const routePoints = truck.route.map(point => [point.latitude, point.longitude]);
+      const color = getRouteColor(truck);
+      const isSelected = selectedTruck?.id === truck.id || 
+                        selectedTruck?.truckId === truck.truckId || 
+                        selectedTruck?.truck_id === truck.truck_id;
+
+      return (
+        <React.Fragment key={`route-${truckId}`}>
+          <Polyline
+            positions={routePoints}
+            color={color}
+            weight={isSelected ? 6 : 4}
+            opacity={isSelected ? 0.9 : 0.7}
+            dashArray={truck.state === 'At Destination' ? '12, 8' : null}
+            lineCap="round"
+            lineJoin="round"
+          />
+          <CircleMarker
+            center={routePoints[0]}
+            radius={10}
+            color={color}
+            fillColor="#ffffff"
+            fillOpacity={1}
+            weight={4}
+          >
+            <Popup>
+              <div style={{ fontFamily: 'system-ui', minWidth: '200px' }}>
+                <h3 style={{ margin: '0 0 8px 0', color: color, fontSize: '16px', fontWeight: '600' }}>
+                  🏁 Start Point
+                </h3>
+                <p style={{ margin: 0, color: '#6B7280', fontSize: '14px' }}>
+                  Truck: {truckId}<br />
+                  Location: Tunis
+                </p>
+              </div>
+            </Popup>
+          </CircleMarker>
+          <CircleMarker
+            center={routePoints[routePoints.length - 1]}
+            radius={10}
+            color={color}
+            fillColor={color}
+            fillOpacity={0.9}
+            weight={4}
+          >
+            <Popup>
+              <div style={{ fontFamily: 'system-ui', minWidth: '200px' }}>
+                <h3 style={{ margin: '0 0 8px 0', color: color, fontSize: '16px', fontWeight: '600' }}>
+                  🎯 Destination
+                </h3>
+                <p style={{ margin: 0, color: '#6B7280', fontSize: '14px' }}>
+                  Truck: {truckId}<br />
+                  Location: {truck.destination || 'Unknown'}
+                </p>
+              </div>
+            </Popup>
+          </CircleMarker>
+        </React.Fragment>
+      );
+    }
+
+    // Render multi-route with routing machine
+    const selectedRouteId = selectedRoutes[truckId];
     return (
-      <React.Fragment key={`route-${truck.truck_id || truck.id}`}>
-        <Polyline
-          positions={routePoints}
-          color={color}
-          weight={isSelected ? 6 : 4}
-          opacity={isSelected ? 0.9 : 0.7}
-          dashArray={truck.state === 'At Destination' ? '12, 8' : null}
-          lineCap="round"
-          lineJoin="round"
-        />
-        <CircleMarker
-          center={routePoints[0]}
-          radius={10}
-          color={color}
-          fillColor="#ffffff"
-          fillOpacity={1}
-          weight={4}
-        >
-          <Popup>
-            <div style={{ fontFamily: 'system-ui', minWidth: '200px' }}>
-              <h3 style={{ margin: '0 0 8px 0', color: color, fontSize: '16px', fontWeight: '600' }}>
-                🏁 Start Point
-              </h3>
-              <p style={{ margin: 0, color: '#6B7280', fontSize: '14px' }}>
-                Truck: {truck.truck_id || truck.id}<br />
-                Location: Tunis
-              </p>
-            </div>
-          </Popup>
-        </CircleMarker>
-        <CircleMarker
-          center={routePoints[routePoints.length - 1]}
-          radius={10}
-          color={color}
-          fillColor={color}
-          fillOpacity={0.9}
-          weight={4}
-        >
-          <Popup>
-            <div style={{ fontFamily: 'system-ui', minWidth: '200px' }}>
-              <h3 style={{ margin: '0 0 8px 0', color: color, fontSize: '16px', fontWeight: '600' }}>
-                🎯 Destination
-              </h3>
-              <p style={{ margin: 0, color: '#6B7280', fontSize: '14px' }}>
-                Truck: {truck.truck_id || truck.id}<br />
-                Location: {truck.destination || 'Unknown'}
-              </p>
-            </div>
-          </Popup>
-        </CircleMarker>
-      </React.Fragment>
+      <MultiRoutingMachine
+        key={`multi-route-${truckId}`}
+        routes={routeData.routes}
+        selectedRouteId={selectedRouteId}
+        onRouteSelect={(routeId) => handleRouteSelect(truckId, routeId)}
+        truckSpeed={truck.speed || 50}
+      />
     );
   };
 
@@ -513,6 +608,189 @@ const TruckMap = ({ trucks, selectedTruck, onTruckSelect, onRequestRoute, socket
     }).filter(Boolean);
   };
 
+  // Render route comparison panel
+  const renderRouteComparison = () => {
+    if (!showRouteComparison || !selectedTruck) return null;
+
+    const truckId = selectedTruck.truck_id || selectedTruck.truckId || selectedTruck.id;
+    const routeData = availableRoutes[truckId];
+    
+    if (!routeData || !routeData.routes || routeData.routes.length <= 1) return null;
+
+    return (
+      <div style={{
+        position: 'absolute',
+        bottom: '20px',
+        left: '20px',
+        right: '20px',
+        zIndex: 1000,
+        background: 'rgba(255, 255, 255, 0.98)',
+        backdropFilter: 'blur(20px)',
+        padding: '20px',
+        borderRadius: '16px',
+        boxShadow: '0 20px 60px rgba(0,0,0,0.1), 0 8px 32px rgba(0,0,0,0.05)',
+        border: '1px solid rgba(255,255,255,0.3)',
+        maxHeight: '300px',
+        overflowY: 'auto'
+      }}>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: '16px'
+        }}>
+          <h4 style={{ 
+            margin: 0, 
+            color: '#1F2937', 
+            fontSize: '18px', 
+            fontWeight: '700',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px'
+          }}>
+            🗺️ Route Options for Truck {truckId}
+          </h4>
+          <button
+            onClick={() => setShowRouteComparison(false)}
+            style={{
+              background: 'none',
+              border: 'none',
+              fontSize: '24px',
+              cursor: 'pointer',
+              color: '#9CA3AF',
+              padding: '4px'
+            }}
+          >
+            ×
+          </button>
+        </div>
+
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+          gap: '12px'
+        }}>
+          {routeData.routes.map(route => {
+            const isSelected = selectedRoutes[truckId] === route.id;
+            const etaInfo = calculateRealTimeETA(route, selectedTruck);
+            
+            const routeColors = {
+              fastest: '#3B82F6',
+              shortest: '#10B981',
+              alternative: '#8B5CF6'
+            };
+            
+            const color = routeColors[route.type] || routeColors.alternative;
+
+            return (
+              <div
+                key={route.id}
+                onClick={() => handleRouteSelect(truckId, route.id)}
+                style={{
+                  background: isSelected ? `${color}10` : 'white',
+                  border: `2px solid ${isSelected ? color : '#E5E7EB'}`,
+                  borderRadius: '12px',
+                  padding: '16px',
+                  cursor: 'pointer',
+                  transition: 'all 0.3s ease',
+                  transform: isSelected ? 'scale(1.02)' : 'scale(1)',
+                  boxShadow: isSelected ? `0 8px 24px ${color}40` : '0 2px 8px rgba(0,0,0,0.1)'
+                }}
+              >
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  marginBottom: '12px'
+                }}>
+                  <h5 style={{
+                    margin: 0,
+                    color: color,
+                    fontSize: '16px',
+                    fontWeight: '700'
+                  }}>
+                    {route.description}
+                  </h5>
+                  {isSelected && (
+                    <span style={{
+                      background: color,
+                      color: 'white',
+                      padding: '4px 8px',
+                      borderRadius: '8px',
+                      fontSize: '12px',
+                      fontWeight: '600'
+                    }}>
+                      ✓ Active
+                    </span>
+                  )}
+                </div>
+
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr',
+                  gap: '12px',
+                  marginBottom: '12px'
+                }}>
+                  <div style={{
+                    background: `${color}08`,
+                    padding: '8px',
+                    borderRadius: '8px'
+                  }}>
+                    <div style={{ fontSize: '12px', color: '#6B7280', marginBottom: '2px' }}>Distance</div>
+                    <div style={{ fontWeight: '700', color: '#1F2937', fontSize: '16px' }}>
+                      {route.distanceKm} km
+                    </div>
+                  </div>
+                  <div style={{
+                    background: `${color}08`,
+                    padding: '8px',
+                    borderRadius: '8px'
+                  }}>
+                    <div style={{ fontSize: '12px', color: '#6B7280', marginBottom: '2px' }}>ETA</div>
+                    <div style={{ fontWeight: '700', color: color, fontSize: '16px' }}>
+                      {etaInfo.eta}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  fontSize: '14px',
+                  color: '#6B7280'
+                }}>
+                  <span>Duration: <strong>{etaInfo.remaining}</strong></span>
+                  <span>Speed: <strong>{etaInfo.speed} km/h</strong></span>
+                </div>
+
+                {etaInfo.progress > 0 && (
+                  <div style={{ marginTop: '8px' }}>
+                    <div style={{ fontSize: '12px', color: '#6B7280', marginBottom: '4px' }}>
+                      Progress: {etaInfo.progress.toFixed(1)}% • Remaining: {etaInfo.remainingDistance} km
+                    </div>
+                    <div style={{
+                      background: '#E5E7EB',
+                      borderRadius: '8px',
+                      height: '6px',
+                      overflow: 'hidden'
+                    }}>
+                      <div style={{
+                        background: color,
+                        height: '100%',
+                        width: `${etaInfo.progress}%`,
+                        transition: 'width 0.3s ease'
+                      }} />
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div style={{ height: '100vh', width: '100%', position: 'relative', background: '#F8FAFC' }}>
       {/* Enhanced Control Panel */}
@@ -591,6 +869,31 @@ const TruckMap = ({ trucks, selectedTruck, onTruckSelect, onRequestRoute, socket
               Auto-Follow Selected Truck
             </span>
           </label>
+
+          <label style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '12px', 
+            cursor: 'pointer',
+            padding: '8px',
+            borderRadius: '8px',
+            transition: 'background 0.2s ease'
+          }}>
+            <input
+              type="checkbox"
+              checked={showRouteComparison}
+              onChange={(e) => setShowRouteComparison(e.target.checked)}
+              style={{ 
+                cursor: 'pointer',
+                width: '18px',
+                height: '18px',
+                accentColor: '#3B82F6'
+              }}
+            />
+            <span style={{ fontSize: '14px', color: '#374151', fontWeight: '500' }}>
+              Show Route Comparison
+            </span>
+          </label>
         </div>
         
         {selectedTruck && (
@@ -610,6 +913,11 @@ const TruckMap = ({ trucks, selectedTruck, onTruckSelect, onRequestRoute, socket
             <div style={{ fontSize: '12px', opacity: '0.9', marginTop: '4px' }}>
               {followTruck ? '📡 Live following enabled' : '📍 Static view'}
             </div>
+            {availableRoutes[selectedTruck.truck_id || selectedTruck.truckId || selectedTruck.id] && (
+              <div style={{ fontSize: '12px', opacity: '0.9', marginTop: '2px' }}>
+                🗺️ {availableRoutes[selectedTruck.truck_id || selectedTruck.truckId || selectedTruck.id].totalAlternatives + 1} routes available
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -627,6 +935,8 @@ const TruckMap = ({ trucks, selectedTruck, onTruckSelect, onRequestRoute, socket
         />
         {renderTruckMarkers()}
       </MapContainer>
+
+      {renderRouteComparison()}
     </div>
   );
 };
