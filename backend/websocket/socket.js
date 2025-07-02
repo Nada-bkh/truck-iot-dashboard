@@ -52,37 +52,73 @@ const initializeWebSocket = (server) => {
         console.log(`   From: [${departure.latitude}, ${departure.longitude}]`);
         console.log(`   To: [${destination.latitude}, ${destination.longitude}]`);
 
-        // Get route from OSRM
-        const osrmUrl = `http://osrm:5000/route/v1/truck/${departure.longitude},${departure.latitude};${destination.longitude},${destination.latitude}?geometries=geojson&overview=full&steps=true`;
-        console.log(`🚀 Requesting OSRM route: ${osrmUrl}`);
+        // Enhanced OSRM request with alternative routes
+        const osrmUrl = `http://osrm:5000/route/v1/truck/${departure.longitude},${departure.latitude};${destination.longitude},${destination.latitude}?geometries=geojson&overview=full&steps=true&alternatives=true&alternatives_number=3&continue_straight=false`;
+        console.log(`🚀 Requesting OSRM routes with alternatives: ${osrmUrl}`);
 
         const response = await axios.get(osrmUrl, {
           timeout: 15000,
           headers: { 'Accept': 'application/json' },
         });
 
-        if (!response.data.routes || !response.data.routes[0]) {
-          throw new Error('No valid route found from OSRM');
+        if (!response.data.routes || response.data.routes.length === 0) {
+          throw new Error('No valid routes found from OSRM');
         }
 
-        const route_data = response.data.routes[0];
-        const waypoints = route_data.geometry.coordinates.map(([lon, lat]) => ({
-          latitude: lat,
-          longitude: lon,
-        }));
+        // Process all routes (main + alternatives)
+        const processedRoutes = response.data.routes.map((route_data, index) => {
+          const waypoints = route_data.geometry.coordinates.map(([lon, lat]) => ({
+            latitude: lat,
+            longitude: lon,
+          }));
 
-        console.log(`✅ OSRM returned route with ${waypoints.length} waypoints`);
-        console.log(`   Distance: ${Math.round(route_data.distance / 1000)} km`);
-        console.log(`   Duration: ${Math.round(route_data.duration / 60)} minutes`);
+          // Calculate route characteristics
+          const distanceKm = route_data.distance / 1000;
+          const durationMinutes = route_data.duration / 60;
+          const avgSpeedKmh = (distanceKm / (durationMinutes / 60)) || 50; // fallback speed
 
-        // Create route update message for Python simulation
+          // Determine route type
+          let routeType, routeDescription;
+          if (index === 0) {
+            routeType = 'fastest';
+            routeDescription = 'Fastest Route';
+          } else if (distanceKm < response.data.routes[0].distance / 1000) {
+            routeType = 'shortest';
+            routeDescription = 'Shortest Route';
+          } else {
+            routeType = 'alternative';
+            routeDescription = `Alternative Route ${index}`;
+          }
+
+          return {
+            id: `route_${index}`,
+            type: routeType,
+            description: routeDescription,
+            waypoints,
+            distance: route_data.distance,
+            duration: route_data.duration,
+            distanceKm: Math.round(distanceKm * 10) / 10,
+            durationMinutes: Math.round(durationMinutes),
+            avgSpeedKmh: Math.round(avgSpeedKmh),
+            isMain: index === 0,
+            geometry: route_data.geometry
+          };
+        });
+
+        console.log(`✅ OSRM returned ${processedRoutes.length} routes:`);
+        processedRoutes.forEach((route, i) => {
+          console.log(`   Route ${i + 1} (${route.type}): ${route.distanceKm} km, ${route.durationMinutes} min`);
+        });
+
+        // Enhanced route update message for Python simulation (use main route)
+        const mainRoute = processedRoutes[0];
         const routeUpdateMessage = {
           truck_id,
-          route: waypoints,
+          route: mainRoute.waypoints,
           destination_name: `Custom Destination (${destination.latitude.toFixed(4)}, ${destination.longitude.toFixed(4)})`,
           timestamp: new Date().toISOString(),
-          distance: route_data.distance,
-          duration: route_data.duration,
+          distance: mainRoute.distance,
+          duration: mainRoute.duration,
           departure: {
             latitude: departure.latitude,
             longitude: departure.longitude
@@ -90,7 +126,8 @@ const initializeWebSocket = (server) => {
           destination: {
             latitude: destination.latitude,
             longitude: destination.longitude
-          }
+          },
+          alternatives: processedRoutes.slice(1) // Send alternatives for reference
         };
 
         console.log('📨 Sending route update to Python simulation via Kafka...');
@@ -106,26 +143,29 @@ const initializeWebSocket = (server) => {
 
         console.log(`✅ Route update sent to simulation for ${truck_id}`);
 
-        // Send route update to frontend for immediate display
+        // Enhanced frontend route update with all routes and ETA calculation
         const frontendRouteUpdate = {
           truck_id,
-          route: waypoints,
-          distance: route_data.distance,
-          duration: route_data.duration,
+          routes: processedRoutes,
+          mainRoute: mainRoute,
           destination_name: routeUpdateMessage.destination_name,
-          timestamp: routeUpdateMessage.timestamp
+          timestamp: routeUpdateMessage.timestamp,
+          totalAlternatives: processedRoutes.length - 1
         };
 
-        io.emit('truckRouteUpdate', frontendRouteUpdate);
-        console.log(`📱 Route update sent to frontend for ${truck_id}`);
+        io.emit('truckMultiRouteUpdate', frontendRouteUpdate);
+        console.log(`📱 Multi-route update sent to frontend for ${truck_id}`);
 
         // Send success response to requesting client
         socket.emit('routeSetSuccess', {
           truck_id,
-          message: `Route set successfully for ${truck_id}`,
-          waypoints: waypoints.length,
-          distance: Math.round(route_data.distance / 1000),
-          duration: Math.round(route_data.duration / 60)
+          message: `${processedRoutes.length} routes calculated for ${truck_id}`,
+          mainRoute: {
+            waypoints: mainRoute.waypoints.length,
+            distance: mainRoute.distanceKm,
+            duration: mainRoute.durationMinutes
+          },
+          alternatives: processedRoutes.length - 1
         });
 
       } catch (error) {
