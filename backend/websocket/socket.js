@@ -53,7 +53,7 @@ const initializeWebSocket = (server) => {
         console.log(`   To: [${destination.latitude}, ${destination.longitude}]`);
 
         // Enhanced OSRM request with alternative routes
-        const osrmUrl = `http://osrm:5000/route/v1/truck/${departure.longitude},${departure.latitude};${destination.longitude},${destination.latitude}?geometries=geojson&overview=full&steps=true&alternatives=true&alternatives_number=3&continue_straight=false`;
+        const osrmUrl = `http://osrm:5000/route/v1/truck/${departure.longitude},${departure.latitude};${destination.longitude},${destination.latitude}?geometries=geojson&overview=full&steps=true&alternatives=true&alternatives_number=3`;
         console.log(`🚀 Requesting OSRM routes with alternatives: ${osrmUrl}`);
 
         const response = await axios.get(osrmUrl, {
